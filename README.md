@@ -9,10 +9,9 @@ Kaggle dataset.
 
 ## View it
 
-Open **[`index.html`](index.html)** in any browser — or, once published, the GitHub Pages URL
-(add it here):
+Open **[`index.html`](index.html)** in any browser — or, once published, the GitHub Pages URL:
 
-> 🔗 Live: _<paste GitHub Pages URL here>_
+> 🔗 Live: _<https://neta-sp.github.io/israeli-singers-network/>_
 
 ### Interactions
 - **scroll** to zoom, **drag the background** to pan
