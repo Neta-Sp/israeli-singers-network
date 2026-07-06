@@ -13,18 +13,6 @@ Open **[`index.html`](index.html)** in any browser — or, once published, the G
 
 > 🔗 Live: _<https://neta-sp.github.io/israeli-singers-network/>_
 
-### Interactions
-- **scroll** to zoom, **drag the background** to pan
-- **drag a node** to pull it around (the layout is physics-based)
-- **hover** a node for its name, community, number of partners, and total shared songs
-
-### Legend
-- **color** = community (clusters of artists who tend to share repertoire — roughly the
-  Mizrahi, classic-rock/singer-songwriter, veteran-vocalist, contemporary-pop, and hip-hop
-  scenes)
-- **node size** = total shared songs (bigger = more co-performed)
-- **edge thickness** = songs the two artists share
-
 ## Data
 - [`artist_network_nodes.csv`](artist_network_nodes.csv) — one row per artist:
   `artist_key`, `partners`, `shared_songs_total`, `community`
