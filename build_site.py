@@ -91,7 +91,7 @@ TEMPLATE = r'''<!DOCTYPE html>
   #legend h3{margin:0 0 8px;font-size:14px;font-weight:700;}
   #legend div{cursor:pointer;user-select:none;transition:opacity .15s;}
   #legend div:hover{opacity:0.7;}
-  #legend div.off{opacity:0.32;text-decoration:line-through;}
+  #legend div.active{font-weight:700;background:rgba(0,0,0,0.06);border-radius:6px;margin:2px -6px;padding:0 6px;}
   .dot{display:inline-block;width:11px;height:11px;border-radius:50%;margin-left:7px;vertical-align:middle;}
   #hint{position:absolute;bottom:16px;left:50%;transform:translateX(-50%);background:rgba(255,255,255,0.88);border:1px solid #e7e7e3;border-radius:20px;padding:7px 18px;font-size:12.5px;color:#666;}
   .vis-tooltip{font-family:'Rubik',sans-serif !important;background:#fff !important;border:1px solid #e2e2de !important;border-radius:8px !important;color:#333 !important;box-shadow:0 3px 14px rgba(0,0,0,0.10) !important;padding:7px 11px !important;font-size:13px !important;}
@@ -125,19 +125,32 @@ const container = document.getElementById('net');
 // ---------- community legend + on/off toggles ----------
 const legendEl = document.getElementById('legend');
 const nodeComm = {}; NODES.forEach(n => nodeComm[n.id] = n.community);
-const hiddenComms = new Set();
-function applyCommunityFilter(){
-  nodes.update(NODES.map(n => ({ id:n.id, hidden: hiddenComms.has(n.community) })));
+// click a community to HIGHLIGHT it (dim the rest); click it again to clear.
+let selectedComm = null;
+let focusId = null, focusKeep = new Set(), lockedNode = null;   // node hover / click-lock focus
+function applyCommunitySelect(){
+  if(selectedComm === null){
+    nodes.update(NODES.map(n => ({ id:n.id, color:{background:baseColor[n.id], border:'#ffffff'}, opacity:1 })));
+    edges.update(edges.getIds().map(id => ({ id, color:EDGE_BASE })));
+    return;
+  }
+  nodes.update(NODES.map(n => ({ id:n.id,
+    color: n.community===selectedComm ? {background:baseColor[n.id], border:'#ffffff'} : {background:'#33363d', border:'#33363d'},
+    opacity: n.community===selectedComm ? 1 : 0.22 })));
   edges.update(edges.getIds().map(id => { const e = edges.get(id);
-    return { id, hidden: hiddenComms.has(nodeComm[e.from]) || hiddenComms.has(nodeComm[e.to]) }; }));
+    const on = nodeComm[e.from]===selectedComm && nodeComm[e.to]===selectedComm;
+    return { id, color: on ? 'rgba(255,255,255,0.7)' : 'rgba(200,200,200,0.03)' }; }));
 }
 LEGEND.forEach(l => {
   const row = document.createElement('div');
   row.innerHTML = '<span class="dot" style="background:' + l.color + '"></span>' + l.top + ' ואחרים';
   row.onclick = () => {
-    if(hiddenComms.has(l.community)){ hiddenComms.delete(l.community); row.classList.remove('off'); }
-    else { hiddenComms.add(l.community); row.classList.add('off'); }
-    applyCommunityFilter();
+    selectedComm = (selectedComm === l.community) ? null : l.community;
+    Array.from(legendEl.querySelectorAll('div')).forEach(d => d.classList.remove('active'));
+    if(selectedComm !== null) row.classList.add('active');
+    lockedNode = null; focusId = null; focusKeep = new Set();   // a community selection clears any node lock
+    applyCommunitySelect();
+    refreshLabels();
   };
   legendEl.appendChild(row);
 });
@@ -149,6 +162,7 @@ LEGEND.forEach(l => {
 const NAME = {}, IMP = {}, baseColor = {};
 NODES.forEach(n => { NAME[n.id]=n.name; IMP[n.id]=n.shared; baseColor[n.id]=n.color.background; });
 const order = NODES.map(n=>n.id).sort((a,b)=>IMP[b]-IMP[a]);
+const rank = {}; order.forEach((id,i)=>rank[id]=i);
 const shown = {}; NODES.forEach(n=>shown[n.id]=null);
 
 const TARGET_FONT = 16;              // on-screen label size (px)
@@ -159,25 +173,42 @@ const BASE = 20;                     // labels shown when fully zoomed out
 const FOCUS_R = 280;                 // focus-lens radius (px); smaller = tighter focus
 const FOCUS_MAX = 1.6;               // size multiplier at the centre of the view
 const FOCUS_MIN = 0.55;              // size multiplier far from the centre
+const LABEL_ZOOM_EXP = 1.9;          // >1 = labels appear sooner as you zoom in (higher = fewer zooms needed)
 let initScale = 1, ready = false;   // ready gates resize() until after the first fit
 
 const loShared = Math.min(...NODES.map(n=>n.shared)), hiShared = Math.max(...NODES.map(n=>n.shared));
 const baseSize = {};
 NODES.forEach(n => { baseSize[n.id] = NODE_MIN + (NODE_MAX-NODE_MIN)*(n.shared-loShared)/((hiShared-loShared)||1); });
 
-function updateLabels(scale){
-  const k = Math.min(order.length, Math.max(BASE, Math.round(BASE * scale / initScale)));
-  const upd=[];
-  order.forEach((id,i)=>{ const s=i<k; if(shown[id]!==s){ upd.push({id,label:s?NAME[id]:' '}); shown[id]=s; } });
+// ---------- focus (hover / click-lock): highlight a node + its neighbours ----------
+const neighSet = id => { const s=new Set([id]); network.getConnectedNodes(id).forEach(x=>s.add(x)); return s; };
+function labelBudget(){ const s=network.getScale()||1;
+  return Math.min(order.length, Math.max(BASE, Math.round(BASE*Math.pow(s/initScale, LABEL_ZOOM_EXP)))); }
+// a focused node forces labels to just its neighbourhood; otherwise the zoom LOD (top hubs) applies
+function wantLabel(id, k){ return focusId!==null ? focusKeep.has(id) : rank[id] < k; }
+function refreshLabels(){
+  const k = labelBudget(); const upd = [];
+  NODES.forEach(n => { const show = wantLabel(n.id, k);
+    if(shown[n.id] !== show){ upd.push({id:n.id, label:show?NAME[n.id]:' '}); shown[n.id]=show; } });
   if(upd.length) nodes.update(upd);
 }
+function highlightNode(id){
+  focusId = id; focusKeep = neighSet(id);
+  nodes.update(NODES.map(n => ({ id:n.id,
+    color: focusKeep.has(n.id) ? {background:baseColor[n.id],border:'#ffffff'} : {background:'#33363d',border:'#33363d'},
+    opacity: focusKeep.has(n.id) ? 1 : 0.35 })));
+  edges.update(edges.getIds().map(eid => { const e=edges.get(eid);
+    return { id:eid, color:(e.from===id||e.to===id)?'rgba(255,255,255,0.85)':'rgba(200,200,200,0.04)' }; }));
+  refreshLabels();               // hide the faded nodes' labels, keep the neighbourhood's
+}
+function clearHighlight(){ focusId=null; focusKeep=new Set(); applyCommunitySelect(); refreshLabels(); }
+
 function applyScale(){
   const scale = network.getScale() || 1;
   network.setOptions({
     nodes: { font:{ size:TARGET_FONT/scale, strokeWidth:4/scale }, borderWidth:BORDER },
     edges: { scaling:{ min:EDGE_MIN/scale, max:EDGE_MAX/scale } }
   });
-  updateLabels(scale);
 }
 function resize(){
   if(!ready) return;                 // don't touch node sizes before the first fit (avoids a zoom/size runaway)
@@ -185,12 +216,17 @@ function resize(){
   const rect = container.getBoundingClientRect();
   const c = network.DOMtoCanvas({ x:rect.width/2, y:rect.height/2 });
   const pos = network.getPositions();
+  // label budget grows faster-than-linear as you zoom in
+  const k = Math.min(order.length, Math.max(BASE, Math.round(BASE * Math.pow(scale/initScale, LABEL_ZOOM_EXP))));
   const upd = [];
   for(const id in pos){
     const dx=(pos[id].x-c.x)*scale, dy=(pos[id].y-c.y)*scale;   // offset from centre in screen px
     const g = Math.exp(-(dx*dx+dy*dy)/(2*FOCUS_R*FOCUS_R));     // 1 at centre -> 0 far away
     const mult = FOCUS_MIN + (FOCUS_MAX-FOCUS_MIN)*g;
-    upd.push({ id, size: baseSize[id]*mult/scale });
+    const show = wantLabel(id, k);                             // focus (hover/lock) overrides the zoom LOD
+    const u = { id, size: baseSize[id]*mult/scale };
+    if(shown[id] !== show){ u.label = show ? NAME[id] : ' '; shown[id] = show; }
+    upd.push(u);
   }
   nodes.update(upd);
 }
@@ -207,19 +243,15 @@ network.once('stabilizationIterationsDone', ()=>{
   setTimeout(()=>{ initScale = network.getScale() || 1; ready = true; NODES.forEach(n=>shown[n.id]=null); applyScale(); resize(); }, 760);
 });
 
-// ---------- hover: highlight a singer's connections, fade the rest ----------
-function neigh(id){ const s=new Set([id]); network.getConnectedNodes(id).forEach(x=>s.add(x)); return s; }
-network.on('hoverNode', p=>{
-  const keep = neigh(p.node);
-  nodes.update(NODES.map(n=>({ id:n.id,
-    color: keep.has(n.id) ? {background:baseColor[n.id]} : {background:'#e3e3df',border:'#eeeeec'},
-    opacity: keep.has(n.id)?1:0.4 })));
-  edges.update(edges.getIds().map(id=>{ const e=edges.get(id);
-    return { id, color:(e.from===p.node||e.to===p.node)?'rgba(255,255,255,0.85)':'rgba(200,200,200,0.05)' }; }));
-});
-network.on('blurNode', ()=>{
-  nodes.update(NODES.map(n=>({id:n.id,color:{background:baseColor[n.id],border:'#ffffff'},opacity:1})));
-  edges.update(edges.getIds().map(id=>({id,color:EDGE_BASE})));
+// ---------- hover to preview a singer's connections; click to lock it ----------
+network.on('hoverNode', p => { if(lockedNode === null) highlightNode(p.node); });
+network.on('blurNode', () => { if(lockedNode === null) clearHighlight(); });
+network.on('click', params => {
+  if(params.nodes.length){
+    const id = params.nodes[0];
+    if(lockedNode === id){ lockedNode = null; clearHighlight(); }   // click the locked node again to release
+    else { lockedNode = id; highlightNode(id); }                    // lock this node + its neighbours
+  } else if(lockedNode !== null){ lockedNode = null; clearHighlight(); }  // click empty space to release
 });
 </script>
 </body>
